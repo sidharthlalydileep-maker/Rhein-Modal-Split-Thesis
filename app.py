@@ -12,48 +12,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolu
 
 st.set_page_config(page_title="Rhine Forecast and Modal Shift", layout="wide")
 
-st.markdown("""
-<style>
-body {
-    background: linear-gradient(135deg, #f7f9fc 0%, #e8f0ff 100%);
-}
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1f3864 0%, #2a4f8a 100%);
-}
-section[data-testid="stSidebar"] * {
-    color: #e8edf5 !important;
-}
-h1, h2, h3, h4 {
-    color: #1f3864;
-    font-weight: 700;
-}
-.metric-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f0f4ff 100%);
-    border-radius: 14px;
-    padding: 16px 18px;
-    box-shadow: 0 2px 10px rgba(31,56,100,0.15);
-    text-align: center;
-    border-top: 4px solid #4e79a7;
-}
-.metric-label {
-    color: #6b7a90;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-.metric-value {
-    color: #1f3864;
-    font-size: 1.6rem;
-    font-weight: 700;
-    margin-top: 4px;
-}
-.metric-sub {
-    color: #8a97a8;
-    font-size: 0.78rem;
-}
-</style>
-""", unsafe_allow_html=True)
-
 df = pd.read_csv("corridor_demand_monthly.csv")
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date").reset_index(drop=True)
@@ -97,7 +55,7 @@ def metrics(name, y_true, y_pred):
         "Model": name,
         "MAE": mean_absolute_error(y_true, y_pred),
         "RMSE": mean_squared_error(y_true, y_pred) ** 0.5,
-        "MAPE (%)": mean_absolute_percentage_error(y_true, y_pred) * 100,
+        "MAPE": mean_absolute_percentage_error(y_true, y_pred) * 100,
         "R2": r2_score(y_true, y_pred)
     }
 
@@ -185,7 +143,7 @@ with tab_comp:
     st.dataframe(results_df.round(4), use_container_width=True)
 
     fig, ax = plt.subplots(2, 2, figsize=(12, 6))
-    metrics_list = ["MAE", "RMSE", "MAPE (%)", "R2"]
+    metrics_list = ["MAE", "RMSE", "MAPE", "R2"]
     colors = ["#4e79a7", "#f1a340", "#e15759", "#59a14f"]
 
     for i, m in enumerate(metrics_list):
@@ -354,13 +312,7 @@ with tab_opt:
                 )
                 st.warning("Manual annual demand for {}: {:.2f} Mt".format(sel_year, demand_mt))
 
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">Demand used</div>
-            <div class="metric-value">{} Mt</div>
-            <div class="metric-sub">Source: {}, Period: {}</div>
-        </div>
-        """.format(demand_mt, demand_source, time_mode), unsafe_allow_html=True)
+        st.write("Demand used: {:.2f} Mt".format(demand_mt))
 
     with col_left:
         kw = kappa_water(kaub_level)
@@ -371,16 +323,55 @@ with tab_opt:
 
         shares = {m: 100 * al[m] / (demand_mt * 1e6) for m in E}
 
-        st.info("Kaub water level: {} cm, barge capacity {:.0f}%".format(kaub_level, kw * 100))
-        st.info("Rail capacity coefficient: {:.0f}%".format(kdb * 100))
+        st.write("Barge share: {:.1f}%".format(shares["barge"]))
+        st.write("Rail share: {:.1f}%".format(shares["rail"]))
+        st.write("Road share: {:.1f}%".format(shares["road"]))
 
-        st.markdown("### Key metrics")
-        c1, c2, c3 = st.columns(3)
+        st.write("Total cost: {:.2f} million EUR".format(cost / 1e6))
+        st.write("Total CO2: {:.2f} kt".format(co2))
 
-        c1.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">Barge share</div>
-            <div class="metric-value">{:.1f}%</div>
-            <div class="metric-sub">{:.2f} Mt</div>
-        </div>
-        """.format(shares["barge"], al["barge"] / 1e6), unsafe_allow_html
+with tab_heat:
+    st.subheader("Scenario heatmap")
+
+    demand_mt_heat = st.slider("Demand for heatmap (Mt)", 5.0, 25.0, 13.0, 0.5)
+
+    kaub_values = [40, 80, 120, 160, 200]
+    kdb_values = [0.2, 0.35, 0.5, 0.75, 1.0]
+
+    co2_matrix = np.zeros((len(kaub_values), len(kdb_values)))
+
+    progress = st.progress(0)
+    total = len(kaub_values) * len(kdb_values)
+    done = 0
+
+    for i, kv in enumerate(kaub_values):
+        for j, kdbv in enumerate(kdb_values):
+            kw = kappa_water(kv)
+            al_h, cost_h, co2_h = optimise(demand_mt_heat * 1e6, kw, kdbv, Cap0)
+            co2_matrix[i, j] = co2_h
+            done += 1
+            progress.progress(done / total)
+
+    fig_h, ax_h = plt.subplots(figsize=(8, 4))
+    sns.heatmap(co2_matrix, annot=True, fmt=".1f",
+                xticklabels=[str(x) for x in kdb_values],
+                yticklabels=[str(x) for x in kaub_values],
+                cmap="magma", ax=ax_h)
+    ax_h.set_xlabel("Rail capacity coefficient")
+    ax_h.set_ylabel("Kaub water level (cm)")
+    ax_h.set_title("CO2 (kt)")
+    st.pyplot(fig_h)
+
+with tab_sim:
+    st.subheader("Multi-scenario simulation")
+
+    n_scen = st.slider("Number of random scenarios", 5, 50, 15, 1)
+    demand_base = st.slider("Base demand (Mt)", 5.0, 25.0, 13.0, 0.5)
+
+    st.write("Randomly varying Kaub level and DB coefficient.")
+
+    scenarios = []
+    progress2 = st.progress(0)
+
+    for k in range(n_scen):
+        kv = np
