@@ -1,6 +1,6 @@
 # ================================================================
 #  Rhine Corridor — Modal-Shift Dashboard (cloud version)
-#  Interactive optimiser + analysis results.
+#  Interactive optimiser + full analysis (forecast, scenarios, ML vs naive)
 #  Deploy on Streamlit Community Cloud.
 # ================================================================
 import streamlit as st
@@ -10,7 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_percentage_error as MAPE, r2_score
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_absolute_error as MAE, mean_absolute_percentage_error as MAPE, r2_score, mean_squared_error
 
 # ---------------- PARAMETERS ----------------
 E    = {'road':81.7, 'rail':12.8, 'barge':32.1}
@@ -29,8 +30,7 @@ def kappa_water(cm):
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv('corridor_demand_monthly.csv', parse_dates=['date']).sort_values('date').reset_index(drop=True)
-    return df
+    return pd.read_csv('corridor_demand_monthly.csv', parse_dates=['date']).sort_values('date').reset_index(drop=True)
 
 def optimise(D, kw, kdb, Cap0):
     cap={'barge':kw*Cap0['barge'],'rail':kdb*Cap0['rail'],'road':1e12}
@@ -41,18 +41,23 @@ def optimise(D, kw, kdb, Cap0):
     return al, sum(cost_pt[m]*al[m] for m in x), sum(co2_pt[m]*al[m] for m in x)/1000
 
 @st.cache_data
-def run_forecast(df):
+def forecast_models(df):
     d=df.copy(); d['y']=d.total_demand_tonnes/1e6
-    d['month']=d.date.dt.month; d['t']=np.arange(len(d))
+    d['month']=d.date.dt.month; d['quarter']=d.date.dt.quarter; d['t']=np.arange(len(d))
     d['lag1']=d.y.shift(1); d['lag12']=d.y.shift(12); d['roll3']=d.y.shift(1).rolling(3).mean()
     d=d.dropna().reset_index(drop=True)
-    F=['month','t','lag1','lag12','roll3','kaub_w_min_cm']; sp=int(len(d)*0.8)
+    F=['month','quarter','t','lag1','lag12','roll3','kaub_w_min_cm']; sp=int(len(d)*0.8)
     Xtr,Xte,ytr,yte=d[F].iloc[:sp],d[F].iloc[sp:],d.y.iloc[:sp],d.y.iloc[sp:]
-    out={}
-    out['Naive']=MAPE(yte,d.lag12.iloc[sp:])*100
-    out['Linear']=MAPE(yte,LinearRegression().fit(Xtr,ytr).predict(Xte))*100
-    out['RandomForest']=MAPE(yte,RandomForestRegressor(n_estimators=200,random_state=0).fit(Xtr,ytr).predict(Xte))*100
-    return out
+    preds={'Naive(-12)':d.lag12.iloc[sp:].values,
+           'Linear':LinearRegression().fit(Xtr,ytr).predict(Xte),
+           'RandomForest':RandomForestRegressor(n_estimators=200,random_state=0).fit(Xtr,ytr).predict(Xte),
+           'XGBoost':XGBRegressor(n_estimators=300,learning_rate=0.05,max_depth=3,random_state=0).fit(Xtr,ytr).predict(Xte)}
+    rows=[]
+    for n,p in preds.items():
+        rows.append({'Model':n,'MAE':MAE(yte,p),'RMSE':mean_squared_error(yte,p)**.5,'MAPE':MAPE(yte,p)*100,'R2':r2_score(yte,p)})
+    metrics=pd.DataFrame(rows)
+    best=metrics[metrics.Model!='Naive(-12)'].sort_values('MAPE').iloc[0].Model
+    return metrics, preds, best
 
 # ============================== PAGE ==============================
 st.set_page_config(page_title="Rhine Modal-Shift Tool", page_icon="🚢", layout="wide")
@@ -69,28 +74,24 @@ section[data-testid="stSidebar"]{background:#1f3864;} section[data-testid="stSid
 st.title("🚢 Rhine Corridor — Modal-Shift Decision Tool")
 st.markdown("<p style='color:#6b7a90;margin-top:-10px;'>Cost- and carbon-optimal road / rail / barge allocation under Rhine low-water and rail-renovation disruptions</p>", unsafe_allow_html=True)
 
-# load data + capacities
 try:
     df = load_data()
     Cap0 = {'barge':HEADROOM*df.barge_tonnes.max(), 'rail':HEADROOM*df.rail_tonnes.max(), 'road':1e12}
     data_ok = True
 except Exception:
-    Cap0 = {'barge':11.5e6, 'rail':6.8e6, 'road':1e12}
-    data_ok = False
+    Cap0 = {'barge':11.5e6, 'rail':6.8e6, 'road':1e12}; data_ok = False
 
-tab1, tab2 = st.tabs(["🎛️ Interactive tool", "📊 Analysis results"])
+tab1, tab2, tab3 = st.tabs(["🎛️ Interactive tool", "📊 Scenarios", "🤖 Forecast analysis"])
 
-# ---------- TAB 1: interactive ----------
+# ---------- TAB 1 ----------
 with tab1:
     st.sidebar.markdown("## ⚙️ Scenario inputs")
     kaub = st.sidebar.slider("Kaub water level (cm)", 0, 350, 300, step=1)
     rail_works = st.sidebar.checkbox("🚧 Rail renovation (DB Generalsanierung)")
     demand_mt = st.sidebar.number_input("Monthly demand (million tonnes)", 5.0, 25.0, 13.2, step=0.5)
-
     kw = kappa_water(kaub); kdb = 0.35 if rail_works else 1.0
     al, cost, co2 = optimise(demand_mt*1e6, kw, kdb, Cap0)
     D = demand_mt*1e6; shares = {m:100*al[m]/D for m in E}
-
     def card(col,label,value,sub=""):
         col.markdown(f"""<div class="metric-card"><div class="metric-label">{label}</div>
         <div class="metric-value">{value}</div><div class="metric-sub">{sub}</div></div>""",unsafe_allow_html=True)
@@ -99,7 +100,6 @@ with tab1:
     card(c2,"Road share",f"{shares['road']:.0f}%",f"{al['road']/1e6:.2f} Mt")
     card(c3,"Total cost",f"€{cost/1e6:.0f}M","per month")
     card(c4,"Total CO₂",f"{co2/1000:.0f} kt","per month")
-
     st.markdown("<br>",unsafe_allow_html=True)
     left,right=st.columns([3,2])
     with left:
@@ -128,32 +128,38 @@ with tab1:
         elif shares['road']>10: st.warning("🟠 Some freight has shifted to road due to disruption.")
         else: st.success("✅ Freight stays on low-carbon modes (barge / rail).")
 
-# ---------- TAB 2: analysis ----------
+# ---------- TAB 2: scenarios ----------
 with tab2:
     if not data_ok:
-        st.warning("Upload corridor_demand_monthly.csv to the repository to enable the analysis results.")
+        st.warning("Upload corridor_demand_monthly.csv to enable analysis.")
     else:
-        st.markdown("#### Forecast model comparison (test-set error, lower = better)")
-        fc = run_forecast(df)
-        fig,ax=plt.subplots(figsize=(6,3))
-        ax.bar(list(fc.keys()), list(fc.values()), color=['#aaa','#4e79a7','#f1a340'])
-        ax.set_ylabel('MAPE %')
-        for i,(k,v) in enumerate(fc.items()): ax.text(i,v+0.1,f'{v:.1f}',ha='center',fontsize=9)
-        st.pyplot(fig)
-        st.caption("Linear regression is the most accurate (it captures the demand trend; tree models cannot extrapolate it).")
-
         st.markdown("#### Optimal modal split across the four disruption scenarios")
         SCEN={'Normal':(1.0,1.0),'Low water':(0.25,1.0),'Rail disruption':(1.0,KDB),'Combined':(0.25,KDB)}
-        Dm=df.total_demand_tonnes.mean()
-        table=[]
+        Dm=df.total_demand_tonnes.mean(); table=[]
         for name,(kw2,kdb2) in SCEN.items():
-            al2,cost2,co2_2=optimise(Dm,kw2,kdb2,Cap0)
+            a2,c2b,co2b=optimise(Dm,kw2,kdb2,Cap0)
             table.append({'Scenario':name,
-                'Road':f"{al2['road']/1e6:.1f} Mt ({100*al2['road']/Dm:.0f}%)",
-                'Rail':f"{al2['rail']/1e6:.1f} Mt ({100*al2['rail']/Dm:.0f}%)",
-                'Barge':f"{al2['barge']/1e6:.1f} Mt ({100*al2['barge']/Dm:.0f}%)",
-                'Cost':f"€{cost2/1e6:.0f}M",'CO₂':f"{co2_2/1000:.0f} kt"})
+                'Road':f"{a2['road']/1e6:.1f} Mt ({100*a2['road']/Dm:.0f}%)",
+                'Rail':f"{a2['rail']/1e6:.1f} Mt ({100*a2['rail']/Dm:.0f}%)",
+                'Barge':f"{a2['barge']/1e6:.1f} Mt ({100*a2['barge']/Dm:.0f}%)",
+                'Cost':f"€{c2b/1e6:.0f}M",'CO₂':f"{co2b/1000:.0f} kt"})
         st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
         st.caption("Combined low water + rail works forces most freight onto road, roughly doubling CO₂ — the decarbonisation benefit is reversed.")
+
+# ---------- TAB 3: forecast analysis (ML) ----------
+with tab3:
+    if not data_ok:
+        st.warning("Upload corridor_demand_monthly.csv to enable the forecast analysis.")
+    else:
+        metrics, preds, best = forecast_models(df)
+        st.markdown(f"#### Forecast model comparison — all four metrics (best: **{best}**)")
+        st.dataframe(metrics.round(3), use_container_width=True, hide_index=True)
+        fig,ax=plt.subplots(1,4,figsize=(15,3.4)); colors=['#aaa','#4e79a7','#f1a340','#e15759']
+        for i,(col,ttl) in enumerate([('MAE','MAE (lower better)'),('RMSE','RMSE (lower better)'),('MAPE','MAPE % (lower better)'),('R2','R² (higher better)')]):
+            ax[i].bar(metrics.Model, metrics[col], color=colors); ax[i].set_title(ttl, fontsize=9, fontweight='bold')
+            ax[i].tick_params(axis='x', rotation=40, labelsize=7)
+            if col=='R2': ax[i].axhline(0,color='k',lw=0.5)
+        plt.tight_layout(); st.pyplot(fig)
+        st.caption(f"{best} outperforms the naive baseline and the tree models on all four metrics — it captures the demand trend, which the tree models cannot extrapolate.")
 
 st.markdown("<br><hr><center><small style='color:#8a97a8;'>M.Sc. thesis — Decarbonising Rhine-corridor freight under disruption · optimisation model (PuLP/CBC)</small></center>",unsafe_allow_html=True)
