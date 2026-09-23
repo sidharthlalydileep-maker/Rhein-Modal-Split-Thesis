@@ -9,11 +9,16 @@ from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
 
-# ----------------- DATA -----------------
+# ============================================================
+# LOAD DATA
+# ============================================================
 df = pd.read_csv("corridor_demand_monthly.csv")
 df['date'] = pd.to_datetime(df['date'])
 df = df.sort_values('date').reset_index(drop=True)
 
+# ============================================================
+# FEATURE ENGINEERING
+# ============================================================
 df['y'] = df.total_demand_tonnes / 1e6
 df['month'] = df.date.dt.month
 df['quarter'] = df.date.dt.quarter
@@ -25,10 +30,13 @@ df = df.dropna().reset_index(drop=True)
 
 features = ['month','quarter','t','lag1','lag12','roll3','kaub_w_min_cm']
 split = int(len(df) * 0.8)
+
 X_train, X_test = df[features].iloc[:split], df[features].iloc[split:]
 y_train, y_test = df.y.iloc[:split], df.y.iloc[split:]
 
-# ----------------- MODELS -----------------
+# ============================================================
+# TRAIN MODELS
+# ============================================================
 pred_naive = df.lag12.iloc[split:].values
 
 lr = LinearRegression().fit(X_train, y_train)
@@ -62,7 +70,9 @@ results = [
 ]
 results_df = pd.DataFrame(results)
 
-# ----------------- OPTIMISER -----------------
+# ============================================================
+# OPTIMISER SETUP
+# ============================================================
 E    = {'road':81.7, 'rail':12.8, 'barge':32.1}
 C    = {'road':0.08, 'rail':0.035, 'barge':0.025}
 DIST = {'road':745.0,'rail':765.0,'barge':846.0}
@@ -97,7 +107,9 @@ def optimise(D, kw, kdb, Cap0):
     al={m:x[m].value() for m in x}
     return al, sum(cost_pt[m]*al[m] for m in x), sum(co2_pt[m]*al[m] for m in x)/1000
 
-# ----------------- STREAMLIT UI -----------------
+# ============================================================
+# STREAMLIT UI
+# ============================================================
 st.set_page_config(page_title="Rhine Forecast & Modal Shift", layout="wide")
 st.title("🚢 Rhine Corridor — Forecast Comparison & Modal-Shift Optimiser")
 
@@ -166,7 +178,7 @@ with tab_opt:
     col_left, col_right = st.columns([2,1])
 
     with col_right:
-        st.markdown("**Scenario inputs**")
+        st.markdown("### Scenario inputs")
         kaub_level = st.slider("Kaub water level (cm)", 0, 350, 120)
         rail_disruption = st.checkbox("DB Generalsanierung (Rotterdam–Basel rail works)")
         kdb_input = st.slider("Rail capacity coefficient (DB disruption)", 0.1, 1.0, 0.35, step=0.05)
@@ -190,26 +202,49 @@ with tab_opt:
         kdb = kdb_input if rail_disruption else 1.0
 
         al, cost, co2 = optimise(demand_mt * 1e6, kw, kdb, Cap0)
-
-        st.markdown(f"**Kaub level:** {kaub_level} cm → barge capacity factor = {kw:.2f}")
-        st.markdown(f"**Rail capacity factor (Rotterdam–Basel, DB):** {kdb:.2f}")
-        st.markdown(f"**Demand used:** {demand_mt:.2f} Mt")
-
         shares = {m: 100 * al[m] / (demand_mt * 1e6) for m in E}
 
-        st.markdown("### Modal allocation (tonnes)")
-        st.write(pd.DataFrame.from_dict(al, orient='index', columns=['tonnes']).round(0))
+        # ------------------ METRIC CARDS ------------------
+        st.markdown("### Key metrics")
 
-        st.markdown("### Modal shares (%)")
-        st.write(pd.DataFrame.from_dict(shares, orient='index', columns=['share %']).round(1))
+        c1, c2, c3 = st.columns(3)
 
-        st.markdown("### Cost and CO₂")
-        st.write(f"**Total cost:** €{cost:,.0f}")
-        st.write(f"**Total CO₂:** {co2:.1f} kt")
+        c1.metric("Barge share", f"{shares['barge']:.1f}%", f"{al['barge']/1e6:.2f} Mt")
+        c2.metric("Rail share", f"{shares['rail']:.1f}%", f"{al['rail']/1e6:.2f} Mt")
+        c3.metric("Road share", f"{shares['road']:.1f}%", f"{al['road']/1e6:.2f} Mt")
 
-        fig3, ax3 = plt.subplots(figsize=(6,3))
-        modes = list(E.keys())
-        vals = [al[m] for m in modes]
-        ax3.bar(modes, vals, color=['#4e79a7','#f1a340','#e15759'])
-        ax3.set_title("Modal allocation (tonnes)")
-        st.pyplot(fig3)
+        st.markdown("---")
+
+        c4, c5 = st.columns(2)
+        c4.metric("Total cost (€)", f"{cost/1e6:.1f} M")
+        c5.metric("Total CO₂", f"{co2:.1f} kt")
+
+        st.markdown("---")
+
+        # ------------------ PERCENTAGE BAR ------------------
+        st.markdown("### Modal split (percentage bar)")
+
+        fig, ax = plt.subplots(figsize=(7,1.2))
+        left = 0
+        colors = {'barge':'#4e79a7', 'rail':'#f1a340', 'road':'#e15759'}
+
+        for m in ['barge','rail','road']:
+            ax.barh(0, shares[m], left=left, color=colors[m])
+            ax.text(left + shares[m]/2, 0, f"{m} {shares[m]:.1f}%", 
+                    ha='center', va='center', color='white', fontsize=9)
+            left += shares[m]
+
+        ax.set_xlim(0,100)
+        ax.axis('off')
+        st.pyplot(fig)
+
+        # ------------------ TABLE ------------------
+        st.markdown("### Detailed allocation (tonnes)")
+        st.dataframe(
+            pd.DataFrame({
+                "Mode": ["Barge","Rail","Road"],
+                "Tonnes": [al['barge'], al['rail'], al['road']],
+                "Share (%)": [shares['barge'], shares['rail'], shares['road']]
+            }).round(2),
+            use_container_width=True
+        )
