@@ -1,7 +1,9 @@
 streamlit
-pulp
 pandas
 numpy
 matplotlib
+seaborn
 scikit-learn
 xgboost
+pulp
+numba
