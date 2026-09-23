@@ -257,7 +257,6 @@ with tab_opt:
             horizontal=True
         )
 
-        # Demand selection
         st.markdown("### Demand selection")
         demand_source = st.radio(
             "Choose demand source:",
@@ -265,7 +264,6 @@ with tab_opt:
             horizontal=True
         )
 
-        # Compute demand_mt based on time + source
         if time_mode == "Single month":
             sel_year = st.number_input("Year", 2026, 2035, 2026)
             sel_month = st.selectbox("Month", list(range(1,13)))
@@ -276,7 +274,6 @@ with tab_opt:
                 demand_mt = forecast_vals[-1]
                 st.success(f"LR forecast for {sel_month}/{sel_year}: **{demand_mt:.2f} Mt**")
             elif demand_source == "Naive forecast (last year)":
-                # naive: same month last year
                 mask = (df.date.dt.year == sel_year-1) & (df.date.dt.month == sel_month)
                 if mask.any():
                     demand_mt = df.loc[mask, 'y'].iloc[0]
@@ -346,34 +343,4 @@ with tab_opt:
                     st.info(f"Naive forecast for full year {sel_year}: **{demand_mt:.2f} Mt (sum)**")
                 else:
                     demand_mt = float(pred_naive[-1])*12
-                    st.warning(f"No full last-year data, using 12× last naive forecast: **{demand_mt:.2f} Mt**")
-            else:
-                demand_mt = st.number_input(
-                    "Enter total annual demand (Mt):",
-                    min_value=50.0,
-                    max_value=300.0,
-                    value=150.0,
-                    step=1.0
-                )
-                st.warning(f"Manual annual demand for {sel_year}: **{demand_mt:.2f} Mt**")
-
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Demand used</div>
-            <div class="metric-value">{demand_mt:.2f} Mt</div>
-            <div class="metric-sub">Source: {demand_source}, Period: {time_mode}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        max_cap_mt = (Cap0['barge'] + Cap0['rail']) / 1e6
-        demand_pct = 100 * demand_mt / max_cap_mt
-
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Demand vs corridor capacity</div>
-            <div class="metric-value">{demand_pct:.1f}%</div>
-            <div class="metric-sub">Max corridor capacity: {max_cap_mt:.1f} Mt</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with
+                    st.warning(f"No full last-year data, using 12× last naive forecast:
