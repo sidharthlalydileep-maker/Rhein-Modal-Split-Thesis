@@ -11,53 +11,51 @@ from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
 
 # ============================================================
-# PAGE CONFIG
+# PAGE CONFIG + THEME
 # ============================================================
 st.set_page_config(page_title="Rhine Forecast & Modal Shift", layout="wide")
 
-# Dark mode toggle
-mode = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
-
-if mode == "Light":
-    st.markdown("""
-    <style>
-    body { background: linear-gradient(135deg, #f7f9fc 0%, #e8f0ff 100%); }
-    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #1f3864 0%, #2a4f8a 100%); }
-    section[data-testid="stSidebar"] * { color: #e8edf5 !important; }
-    h1, h2, h3, h4 { color: #1f3864; font-weight: 700; }
-    .metric-card {
-        background: linear-gradient(135deg, #ffffff 0%, #f0f4ff 100%);
-        border-radius: 14px;
-        padding: 16px 18px;
-        box-shadow: 0 2px 10px rgba(31,56,100,0.15);
-        text-align: center;
-        border-top: 4px solid #4e79a7;
-    }
-    .metric-label { color: #6b7a90; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    .metric-value { color: #1f3864; font-size: 1.6rem; font-weight: 700; margin-top: 4px; }
-    .metric-sub { color: #8a97a8; font-size: 0.78rem; }
-    </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <style>
-    body { background: radial-gradient(circle at top, #1b1f3b 0%, #05060a 60%); color: #e8edf5; }
-    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #05060a 0%, #1b1f3b 100%); }
-    section[data-testid="stSidebar"] * { color: #e8edf5 !important; }
-    h1, h2, h3, h4 { color: #e8edf5; font-weight: 700; }
-    .metric-card {
-        background: linear-gradient(135deg, #141726 0%, #252a3f 100%);
-        border-radius: 14px;
-        padding: 16px 18px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.6);
-        text-align: center;
-        border-top: 4px solid #ff4b4b;
-    }
-    .metric-label { color: #b0b7c9; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    .metric-value { color: #ffffff; font-size: 1.6rem; font-weight: 700; margin-top: 4px; }
-    .metric-sub { color: #9aa3b8; font-size: 0.78rem; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+body {
+    background: linear-gradient(135deg, #f7f9fc 0%, #e8f0ff 100%);
+}
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1f3864 0%, #2a4f8a 100%);
+}
+section[data-testid="stSidebar"] * {
+    color: #e8edf5 !important;
+}
+h1, h2, h3, h4 {
+    color: #1f3864;
+    font-weight: 700;
+}
+.metric-card {
+    background: linear-gradient(135deg, #ffffff 0%, #f0f4ff 100%);
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: 0 2px 10px rgba(31,56,100,0.15);
+    text-align: center;
+    border-top: 4px solid #4e79a7;
+}
+.metric-label {
+    color: #6b7a90;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.metric-value {
+    color: #1f3864;
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-top: 4px;
+}
+.metric-sub {
+    color: #8a97a8;
+    font-size: 0.78rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================================
 # LOAD DATA
@@ -159,13 +157,29 @@ def optimise(D, kw, kdb, Cap0):
     return al, sum(cost_pt[m]*al[m] for m in x), sum(co2_pt[m]*al[m] for m in x)/1000
 
 # ============================================================
+# FORECAST HORIZON (MONTH / QUARTER / YEAR)
+# ============================================================
+def forecast_months_ahead(model, X_last, months):
+    X_future = X_last.copy()
+    preds = []
+    for i in range(months):
+        X_future["t"] += 1
+        X_future["month"] = ((X_future["month"] % 12) + 1)
+        X_future["quarter"] = ((X_future["month"] - 1)//3) + 1
+        pred = model.predict(pd.DataFrame([X_future]))[0]
+        preds.append(pred)
+    return preds
+
+X_last = df[features].iloc[-1]
+
+# ============================================================
 # UI TABS
 # ============================================================
 st.title("🚢 Rhine Corridor — Forecast Comparison & Modal-Shift Optimiser")
 
-tab_comp, tab_naive, tab_lr, tab_rf, tab_xgb, tab_opt, tab_heat, tab_sim = st.tabs(
+tab_comp, tab_naive, tab_lr, tab_rf, tab_xgb, tab_opt, tab_heat, tab_sim, tab_db = st.tabs(
     ["📊 Model comparison", "Naive", "Linear Regression", "Random Forest", "XGBoost",
-     "⚙️ Optimiser", "🔥 Scenario heatmap", "🧪 Multi-scenario simulation"]
+     "⚙️ Optimiser", "🔥 Scenario heatmap", "🧪 Multi-scenario simulation", "📚 DB disruption source"]
 )
 
 # ---------- COMPARISON TAB ----------
@@ -236,34 +250,118 @@ with tab_opt:
         rail_disruption = st.checkbox("DB Generalsanierung (Rotterdam–Basel rail works)")
         kdb_input = st.slider("Rail capacity coefficient (DB disruption)", 0.1, 1.0, 0.35, step=0.05)
 
-        st.markdown("### Demand selection")
-        demand_source = st.radio(
-            "Choose demand source:",
-            ["Linear Regression forecast", "Naive forecast", "Manual input"],
+        st.markdown("### Time selection")
+        time_mode = st.radio(
+            "Choose time period:",
+            ["Single month", "Quarter", "Full year"],
             horizontal=True
         )
 
-        if demand_source == "Linear Regression forecast":
-            demand_mt = float(pred_lr[-1])
-            st.success(f"Using Linear Regression forecast: **{demand_mt:.2f} Mt**")
-        elif demand_source == "Naive forecast":
-            demand_mt = float(pred_naive[-1])
-            st.info(f"Using Naive forecast: **{demand_mt:.2f} Mt**")
-        else:
-            demand_mt = st.number_input(
-                "Enter monthly demand (in million tonnes):",
-                min_value=5.0,
-                max_value=25.0,
-                value=13.0,
-                step=0.1
-            )
-            st.warning(f"Using manual demand: **{demand_mt:.2f} Mt**")
+        # Demand selection
+        st.markdown("### Demand selection")
+        demand_source = st.radio(
+            "Choose demand source:",
+            ["Linear Regression forecast", "Naive forecast (last year)", "Manual input"],
+            horizontal=True
+        )
+
+        # Compute demand_mt based on time + source
+        if time_mode == "Single month":
+            sel_year = st.number_input("Year", 2026, 2035, 2026)
+            sel_month = st.selectbox("Month", list(range(1,13)))
+            months_ahead = (sel_year - df.date.iloc[-1].year)*12 + (sel_month - df.date.iloc[-1].month)
+
+            if demand_source == "Linear Regression forecast":
+                forecast_vals = forecast_months_ahead(lr, X_last, max(months_ahead, 1))
+                demand_mt = forecast_vals[-1]
+                st.success(f"LR forecast for {sel_month}/{sel_year}: **{demand_mt:.2f} Mt**")
+            elif demand_source == "Naive forecast (last year)":
+                # naive: same month last year
+                mask = (df.date.dt.year == sel_year-1) & (df.date.dt.month == sel_month)
+                if mask.any():
+                    demand_mt = df.loc[mask, 'y'].iloc[0]
+                    st.info(f"Naive forecast (same month last year): **{demand_mt:.2f} Mt**")
+                else:
+                    demand_mt = float(pred_naive[-1])
+                    st.warning(f"No exact last-year data, using last naive forecast: **{demand_mt:.2f} Mt**")
+            else:
+                demand_mt = st.number_input(
+                    "Enter monthly demand (in million tonnes):",
+                    min_value=5.0,
+                    max_value=25.0,
+                    value=13.0,
+                    step=0.1
+                )
+                st.warning(f"Manual demand for {sel_month}/{sel_year}: **{demand_mt:.2f} Mt**")
+
+        elif time_mode == "Quarter":
+            sel_year = st.number_input("Year", 2026, 2035, 2026)
+            sel_quarter = st.selectbox("Quarter", ["Q1","Q2","Q3","Q4"])
+            q_map = {"Q1":[1,2,3], "Q2":[4,5,6], "Q3":[7,8,9], "Q4":[10,11,12]}
+
+            if demand_source == "Linear Regression forecast":
+                forecast_vals = []
+                for m in q_map[sel_quarter]:
+                    months_ahead = (sel_year - df.date.iloc[-1].year)*12 + (m - df.date.iloc[-1].month)
+                    f = forecast_months_ahead(lr, X_last, max(months_ahead,1))[-1]
+                    forecast_vals.append(f)
+                demand_mt = np.mean(forecast_vals)
+                st.success(f"LR forecast for {sel_quarter} {sel_year}: **{demand_mt:.2f} Mt (avg per month)**")
+            elif demand_source == "Naive forecast (last year)":
+                vals = []
+                for m in q_map[sel_quarter]:
+                    mask = (df.date.dt.year == sel_year-1) & (df.date.dt.month == m)
+                    if mask.any():
+                        vals.append(df.loc[mask,'y'].iloc[0])
+                if vals:
+                    demand_mt = np.mean(vals)
+                    st.info(f"Naive forecast for {sel_quarter} {sel_year}: **{demand_mt:.2f} Mt (avg per month)**")
+                else:
+                    demand_mt = float(pred_naive[-1])
+                    st.warning(f"No full last-year quarter data, using last naive forecast: **{demand_mt:.2f} Mt**")
+            else:
+                demand_mt = st.number_input(
+                    "Enter average monthly demand for quarter (Mt):",
+                    min_value=5.0,
+                    max_value=25.0,
+                    value=13.0,
+                    step=0.1
+                )
+                st.warning(f"Manual average monthly demand for {sel_quarter} {sel_year}: **{demand_mt:.2f} Mt**")
+
+        else:  # Full year
+            sel_year = st.number_input("Year", 2026, 2035, 2026)
+            if demand_source == "Linear Regression forecast":
+                forecast_vals = []
+                for m in range(1,13):
+                    months_ahead = (sel_year - df.date.iloc[-1].year)*12 + (m - df.date.iloc[-1].month)
+                    f = forecast_months_ahead(lr, X_last, max(months_ahead,1))[-1]
+                    forecast_vals.append(f)
+                demand_mt = sum(forecast_vals)
+                st.success(f"LR forecast for full year {sel_year}: **{demand_mt:.2f} Mt (sum of 12 months)**")
+            elif demand_source == "Naive forecast (last year)":
+                mask = (df.date.dt.year == sel_year-1)
+                if mask.any():
+                    demand_mt = df.loc[mask,'y'].sum()
+                    st.info(f"Naive forecast for full year {sel_year}: **{demand_mt:.2f} Mt (sum)**")
+                else:
+                    demand_mt = float(pred_naive[-1])*12
+                    st.warning(f"No full last-year data, using 12× last naive forecast: **{demand_mt:.2f} Mt**")
+            else:
+                demand_mt = st.number_input(
+                    "Enter total annual demand (Mt):",
+                    min_value=50.0,
+                    max_value=300.0,
+                    value=150.0,
+                    step=1.0
+                )
+                st.warning(f"Manual annual demand for {sel_year}: **{demand_mt:.2f} Mt**")
 
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Demand used</div>
             <div class="metric-value">{demand_mt:.2f} Mt</div>
-            <div class="metric-sub">Source: {demand_source}</div>
+            <div class="metric-sub">Source: {demand_source}, Period: {time_mode}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -278,182 +376,4 @@ with tab_opt:
         </div>
         """, unsafe_allow_html=True)
 
-    with col_left:
-        kw = kappa_water(kaub_level)
-        kdb = kdb_input if rail_disruption else 1.0
-
-        with st.spinner("Running optimiser..."):
-            al, cost, co2 = optimise(demand_mt * 1e6, kw, kdb, Cap0)
-
-        shares = {m: 100 * al[m] / (demand_mt * 1e6) for m in E}
-
-        st.info(f"""
-        ### Scenario summary
-        - **Kaub water level:** {kaub_level} cm → barge capacity = {kw*100:.0f}%
-        - **Rail capacity (DB disruption):** {kdb*100:.0f}%
-        - **Demand used:** {demand_mt:.2f} Mt
-        """)
-
-        # Metric cards
-        st.markdown("### Key metrics")
-        c1, c2, c3 = st.columns(3)
-
-        c1.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Barge share</div>
-            <div class="metric-value">{shares['barge']:.1f}%</div>
-            <div class="metric-sub">{al['barge']/1e6:.2f} Mt</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        c2.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Rail share</div>
-            <div class="metric-value">{shares['rail']:.1f}%</div>
-            <div class="metric-sub">{al['rail']/1e6:.2f} Mt</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        c3.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Road share</div>
-            <div class="metric-value">{shares['road']:.1f}%</div>
-            <div class="metric-sub">{al['road']/1e6:.2f} Mt</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("---")
-        c4, c5 = st.columns(2)
-        c4.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total cost</div>
-            <div class="metric-value">{cost/1e6:.1f} M€</div>
-            <div class="metric-sub">Includes CO₂ penalty</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        c5.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total CO₂</div>
-            <div class="metric-value">{co2:.1f} kt</div>
-            <div class="metric-sub">All modes combined</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # CO₂ savings vs baseline (no disruption, high water)
-        baseline_al, baseline_cost, baseline_co2 = optimise(
-            demand_mt * 1e6,
-            kw=1.0,
-            kdb=1.0,
-            Cap0=Cap0
-        )
-        co2_savings = baseline_co2 - co2
-
-        st.markdown("---")
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">CO₂ difference vs baseline</div>
-            <div class="metric-value">{co2_savings:.1f} kt</div>
-            <div class="metric-sub">Positive = more emissions than baseline</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Percentage bar
-        st.markdown("### Modal split (percentage bar)")
-        fig, ax = plt.subplots(figsize=(8,1.4))
-        left = 0
-        colors = {'barge':'#4e79a7', 'rail':'#f1a340', 'road':'#e15759'}
-
-        for m in ['barge','rail','road']:
-            ax.barh(0, shares[m], left=left, color=colors[m])
-            ax.text(left + shares[m]/2, 0, f"{m.capitalize()} {shares[m]:.1f}%", 
-                    ha='center', va='center', color='white', fontsize=10, fontweight='bold')
-            left += shares[m]
-
-        ax.set_xlim(0,100)
-        ax.axis('off')
-        st.pyplot(fig)
-
-        st.markdown("### Detailed allocation (tonnes)")
-        st.dataframe(
-            pd.DataFrame({
-                "Mode": ["Barge","Rail","Road"],
-                "Tonnes": [al['barge'], al['rail'], al['road']],
-                "Share (%)": [shares['barge'], shares['rail'], shares['road']]
-            }).round(2),
-            use_container_width=True
-        )
-
-# ---------- SCENARIO HEATMAP TAB ----------
-with tab_heat:
-    st.subheader("Scenario comparison heatmap (CO₂ vs Kaub & DB coefficient)")
-
-    demand_mt_heat = st.slider("Demand for heatmap (Mt)", 5.0, 25.0, 13.0, 0.5)
-
-    kaub_values = [40, 80, 120, 160, 200]
-    kdb_values = [0.2, 0.35, 0.5, 0.75, 1.0]
-
-    co2_matrix = np.zeros((len(kaub_values), len(kdb_values)))
-
-    progress = st.progress(0)
-    total = len(kaub_values) * len(kdb_values)
-    done = 0
-
-    for i, kv in enumerate(kaub_values):
-        for j, kdbv in enumerate(kdb_values):
-            kw = kappa_water(kv)
-            al_h, cost_h, co2_h = optimise(demand_mt_heat * 1e6, kw, kdbv, Cap0)
-            co2_matrix[i, j] = co2_h
-            done += 1
-            progress.progress(done/total)
-
-    fig_h, ax_h = plt.subplots(figsize=(8,4))
-    sns.heatmap(co2_matrix, annot=True, fmt=".1f",
-                xticklabels=[f"{x:.2f}" for x in kdb_values],
-                yticklabels=[str(x) for x in kaub_values],
-                cmap="magma", ax=ax_h)
-    ax_h.set_xlabel("Rail capacity coefficient (DB)")
-    ax_h.set_ylabel("Kaub water level (cm)")
-    ax_h.set_title(f"CO₂ (kt) for demand {demand_mt_heat:.1f} Mt")
-    st.pyplot(fig_h)
-
-# ---------- MULTI-SCENARIO SIM TAB ----------
-with tab_sim:
-    st.subheader("Multi-scenario simulation")
-
-    n_scen = st.slider("Number of random scenarios", 5, 50, 15, 1)
-    demand_base = st.slider("Base demand (Mt)", 5.0, 25.0, 13.0, 0.5)
-
-    st.write("Randomly varying Kaub level and DB coefficient around realistic ranges.")
-
-    scenarios = []
-    progress2 = st.progress(0)
-
-    for k in range(n_scen):
-        kv = np.random.uniform(30, 220)
-        kdbv = np.random.uniform(0.2, 1.0)
-        demand_s = np.random.uniform(demand_base*0.8, demand_base*1.2)
-
-        kw = kappa_water(kv)
-        al_s, cost_s, co2_s = optimise(demand_s * 1e6, kw, kdbv, Cap0)
-
-        scenarios.append({
-            "Kaub_cm": kv,
-            "Rail_coeff": kdbv,
-            "Demand_Mt": demand_s,
-            "Cost_M€": cost_s/1e6,
-            "CO2_kt": co2_s,
-            "Road_share_%": 100 * al_s['road']/(demand_s*1e6)
-        })
-        progress2.progress((k+1)/n_scen)
-
-    scen_df = pd.DataFrame(scenarios)
-    st.dataframe(scen_df.round(2), use_container_width=True)
-
-    st.subheader("CO₂ vs road share")
-    fig_s, ax_s = plt.subplots(figsize=(7,4))
-    ax_s.scatter(scen_df["Road_share_%"], scen_df["CO2_kt"], c=scen_df["Kaub_cm"], cmap="viridis")
-    ax_s.set_xlabel("Road share (%)")
-    ax_s.set_ylabel("CO₂ (kt)")
-    ax_s.set_title("Random scenarios: CO₂ vs road share (colour = Kaub level)")
-    st.pyplot(fig_s)
+    with
