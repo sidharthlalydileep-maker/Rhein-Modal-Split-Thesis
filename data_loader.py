@@ -16,7 +16,24 @@ import os
 import pandas as pd
 import numpy as np
 
-DATA = os.path.join(os.path.dirname(__file__), "data")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(HERE, "data")
+
+
+def _find(fname):
+    """Locate a data file whether it sits in ./data, next to this script,
+    or in the current working directory. Makes the loader robust to how the
+    files were uploaded (e.g. GitHub web upload placing them at the repo root)."""
+    for cand in (os.path.join(DATA, fname),
+                 os.path.join(HERE, fname),
+                 os.path.join(os.getcwd(), fname),
+                 fname):
+        if os.path.exists(cand):
+            return cand
+    # fall back to the expected ./data path so the error message is clear
+    return os.path.join(DATA, fname)
+
+
 MONTHS = {m: i for i, m in enumerate(
     ["January", "February", "March", "April", "May", "June", "July",
      "August", "September", "October", "November", "December"], start=1)}
@@ -29,7 +46,7 @@ def _read_destatis(fname, value_scale=1.0):
     Goods carried' in tonnes (road: 1000 t, hence value_scale).
     Returns a DataFrame [date, tonnes].
     """
-    path = os.path.join(DATA, fname)
+    path = _find(fname)
     rows = []
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -64,7 +81,7 @@ def load_kaub_monthly():
 
     The monthly minimum is the governing low-water statistic for navigation.
     """
-    path = os.path.join(DATA, "kaub.csv")
+    path = _find("kaub.csv")
     k = pd.read_csv(path, sep=";", names=["timestamp", "value"], header=0)
     k["value"] = pd.to_numeric(k["value"], errors="coerce")
     k = k.dropna(subset=["value"])
