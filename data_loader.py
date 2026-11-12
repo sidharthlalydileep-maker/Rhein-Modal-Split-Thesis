@@ -30,6 +30,13 @@ def _find(fname):
                  fname):
         if os.path.exists(cand):
             return cand
+    # case-insensitive walk from the script dir — handles a folder named
+    # "Data" vs "data" (Linux is case-sensitive, Windows is not).
+    target = fname.lower()
+    for root, _dirs, files in os.walk(HERE):
+        for f in files:
+            if f.lower() == target:
+                return os.path.join(root, f)
     # fall back to the expected ./data path so the error message is clear
     return os.path.join(DATA, fname)
 
